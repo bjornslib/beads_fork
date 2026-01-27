@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/steveyegge/beads/internal/storage"
+	"github.com/steveyegge/beads/internal/types"
 )
 
 // TaskWatcher monitors ~/.claude/tasks/ for changes and syncs task state to beads.
@@ -231,6 +232,9 @@ func (w *TaskWatcher) syncTasks(ctx context.Context, taskListID, taskFile string
 		return fmt.Errorf("clearing existing tasks: %w", err)
 	}
 
+	// Track bead IDs affected by this sync for status updates
+	affectedBeadIDs := make(map[string]struct{})
+
 	// Insert new tasks
 	for i, todo := range taskFileData.Todos {
 		var beadID *string
@@ -240,6 +244,7 @@ func (w *TaskWatcher) syncTasks(ctx context.Context, taskListID, taskFile string
 		if matches := w.beadIDRegex.FindStringSubmatch(todo.Content); len(matches) == 3 {
 			beadID = &matches[1]
 			content = matches[2] // Strip prefix from stored content
+			affectedBeadIDs[*beadID] = struct{}{}
 		}
 
 		taskID := generateTaskID(taskListID, content, i)
@@ -261,6 +266,98 @@ func (w *TaskWatcher) syncTasks(ctx context.Context, taskListID, taskFile string
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing transaction: %w", err)
+	}
+
+	// After commit, sync bead statuses based on task completion
+	if len(affectedBeadIDs) > 0 {
+		if err := w.syncBeadStatuses(ctx, db, affectedBeadIDs); err != nil {
+			// Log but don't fail - task sync succeeded
+			fmt.Fprintf(os.Stderr, "warning: failed to sync bead statuses: %v\n", err)
+		}
+	}
+
+	return nil
+}
+
+// syncBeadStatuses checks task completion for each bead and updates bead status accordingly.
+// Rules:
+// - If ALL tasks for a bead are "completed" → set bead status to "done"
+// - If ANY task for a bead is "in_progress" → set bead status to "in_progress"
+// - Otherwise, leave bead status unchanged
+func (w *TaskWatcher) syncBeadStatuses(ctx context.Context, db *sql.DB, beadIDs map[string]struct{}) error {
+	for beadID := range beadIDs {
+		// Query all tasks for this bead across all task lists
+		rows, err := db.QueryContext(ctx, `
+			SELECT status FROM cc_tasks WHERE bead_id = ?
+		`, beadID)
+		if err != nil {
+			return fmt.Errorf("querying tasks for bead %s: %w", beadID, err)
+		}
+
+		var statuses []string
+		for rows.Next() {
+			var status string
+			if err := rows.Scan(&status); err != nil {
+				rows.Close()
+				return fmt.Errorf("scanning task status: %w", err)
+			}
+			statuses = append(statuses, status)
+		}
+		rows.Close()
+
+		if len(statuses) == 0 {
+			continue // No tasks for this bead
+		}
+
+		// Determine what status the bead should have
+		allCompleted := true
+		anyInProgress := false
+		for _, s := range statuses {
+			if s != "completed" {
+				allCompleted = false
+			}
+			if s == "in_progress" {
+				anyInProgress = true
+			}
+		}
+
+		var newStatus types.Status
+		if allCompleted {
+			newStatus = types.StatusClosed
+		} else if anyInProgress {
+			newStatus = types.StatusInProgress
+		} else {
+			continue // Leave bead status unchanged
+		}
+
+		// Check current bead status to avoid unnecessary updates
+		issue, err := w.store.GetIssue(ctx, beadID)
+		if err != nil {
+			// Bead might not exist - log and continue
+			fmt.Fprintf(os.Stderr, "warning: bead %s not found, skipping status sync\n", beadID)
+			continue
+		}
+
+		if issue.Status == newStatus {
+			continue // Already at target status
+		}
+
+		// Don't downgrade from "closed" to "in_progress"
+		if issue.Status == types.StatusClosed && newStatus == types.StatusInProgress {
+			continue
+		}
+
+		// Update bead status
+		updates := map[string]interface{}{
+			"status": string(newStatus),
+		}
+		if err := w.store.UpdateIssue(ctx, beadID, updates, "task-watcher"); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to update bead %s status to %s: %v\n", beadID, newStatus, err)
+			continue
+		}
+
+		fmt.Fprintf(os.Stderr, "task-watcher: updated bead %s status to %s (all tasks %s)\n",
+			beadID, newStatus, map[bool]string{true: "completed", false: "in progress"}[allCompleted])
 	}
 
 	return nil
