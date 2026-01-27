@@ -49,6 +49,12 @@ type Issue struct {
 	ExternalRef  *string `json:"external_ref,omitempty"`  // e.g., "gh-9", "jira-ABC"
 	SourceSystem string  `json:"source_system,omitempty"` // Adapter/system that created this issue (federation)
 
+	// ===== Team Collaboration (PRD-TEAM-COLLAB) =====
+	GitHubUsername string     `json:"github_username,omitempty"` // GitHub username for team dashboard
+	Team           string     `json:"team,omitempty"`            // Optional team grouping
+	LastSyncedAt   *time.Time `json:"last_synced_at,omitempty"`  // When issue was last synced
+	SyncSource     string     `json:"sync_source,omitempty"`     // 'local' or 'remote:<machine>'
+
 	// ===== Compaction Metadata =====
 	CompactionLevel   int        `json:"compaction_level,omitempty"`
 	CompactedAt       *time.Time `json:"compacted_at,omitempty"`

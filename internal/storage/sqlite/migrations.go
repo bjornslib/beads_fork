@@ -58,6 +58,7 @@ var migrationsList = []Migration{
 	{"source_system_column", migrations.MigrateSourceSystemColumn},
 	{"quality_score_column", migrations.MigrateQualityScoreColumn},
 	{"cc_tasks_tables", migrations.MigrateCCTasksTables},
+	{"team_collaboration_columns", migrations.MigrateTeamCollaborationColumns},
 }
 
 // MigrationInfo contains metadata about a migration for inspection
@@ -123,6 +124,7 @@ func getMigrationDescription(name string) string {
 		"source_system_column":         "Adds source_system column for federation adapter tracking",
 		"quality_score_column":         "Adds quality_score column for aggregate quality (0.0-1.0) set by Refineries",
 		"cc_tasks_tables":              "Adds cc_tasks and task_file_state tables for Claude Code task tracking sync",
+		"team_collaboration_columns":   "Adds github_username, team, last_synced_at, sync_source columns for team collaboration",
 	}
 
 	if desc, ok := descriptions[name]; ok {
