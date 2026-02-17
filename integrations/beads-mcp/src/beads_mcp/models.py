@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Literal, Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # Type aliases for issue statuses, types, and dependencies
 #
@@ -145,6 +145,25 @@ class Issue(IssueBase):
 
     dependencies: list[LinkedIssue] = Field(default_factory=list)
     dependents: list[LinkedIssue] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _filter_raw_dependencies(cls, data: Any) -> Any:
+        """Filter out raw Dependency records that lack required LinkedIssue fields.
+
+        The Go list endpoint may send raw Dependency records (issue_id, depends_on_id, type)
+        instead of hydrated LinkedIssue objects (id, title, status). This validator
+        gracefully handles the mismatch by dropping unparseable entries.
+        """
+        if isinstance(data, dict):
+            for field in ("dependencies", "dependents"):
+                items = data.get(field)
+                if isinstance(items, list):
+                    data[field] = [
+                        item for item in items
+                        if isinstance(item, dict) and "id" in item and "title" in item
+                    ]
+        return data
 
 
 class Dependency(BaseModel):
